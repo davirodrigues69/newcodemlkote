@@ -1,0 +1,306 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasProfile() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/profiles/$(request.auth.uid));
+    }
+
+    function profile() {
+      return get(/databases/$(database)/documents/profiles/$(request.auth.uid)).data;
+    }
+
+    function isCoordination() {
+      return hasProfile() && profile().role == "admin";
+    }
+
+    function isTeacher() {
+      return hasProfile() && profile().role == "teacher";
+    }
+
+    function isStaff() {
+      return isCoordination() || isTeacher();
+    }
+
+    function validName(data) {
+      return data.first_name is string
+        && data.first_name.size() > 0
+        && data.first_name.size() <= 80
+        && data.last_name is string
+        && data.last_name.size() > 0
+        && data.last_name.size() <= 120;
+    }
+
+    function ownsStudent(studentId) {
+      return isStaff()
+        && exists(/databases/$(database)/documents/students/$(studentId))
+        && get(/databases/$(database)/documents/students/$(studentId)).data.created_by == request.auth.uid;
+    }
+
+    function ownsContent(contentId) {
+      return isStaff()
+        && exists(/databases/$(database)/documents/contents/$(contentId))
+        && get(/databases/$(database)/documents/contents/$(contentId)).data.teacher_id == request.auth.uid;
+    }
+
+    match /profiles/{userId} {
+      allow get: if signedIn() && (request.auth.uid == userId || isCoordination());
+      allow list: if isCoordination();
+
+      allow create: if (
+          signedIn()
+          && request.auth.uid == userId
+          && request.auth.token.email != null
+          && request.resource.data.keys().hasOnly([
+            "user_id", "email", "first_name", "last_name", "role", "created_at", "updated_at"
+          ])
+          && request.resource.data.user_id == request.auth.uid
+          && request.resource.data.email == request.auth.token.email
+          && request.resource.data.role in ["student", "parent"]
+          && validName(request.resource.data)
+        )
+        || (
+          isCoordination()
+          && request.resource.data.keys().hasOnly([
+            "user_id", "email", "first_name", "last_name", "role", "created_by", "created_at", "updated_at"
+          ])
+          && request.resource.data.user_id == userId
+          && request.resource.data.role == "teacher"
+          && request.resource.data.created_by == request.auth.uid
+          && validName(request.resource.data)
+        );
+
+      allow update: if (
+          signedIn()
+          && request.auth.uid == userId
+          && request.resource.data.user_id == resource.data.user_id
+          && request.resource.data.email == resource.data.email
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            "first_name", "last_name", "photo_url", "updated_at"
+          ])
+          && validName(request.resource.data)
+        )
+        || (
+          isCoordination()
+          && resource.data.role == "teacher"
+          && request.resource.data.user_id == resource.data.user_id
+          && request.resource.data.email == resource.data.email
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            "first_name", "last_name", "updated_at"
+          ])
+          && validName(request.resource.data)
+        );
+
+      allow delete: if isCoordination() && resource.data.role == "teacher";
+    }
+
+    match /students/{studentId} {
+      allow read: if isCoordination()
+        || (isTeacher() && resource.data.created_by == request.auth.uid)
+        || (
+          signedIn()
+          && request.auth.token.email != null
+          && (
+            resource.data.email == request.auth.token.email
+            || (resource.data.guardian_emails is list && request.auth.token.email in resource.data.guardian_emails)
+          )
+        );
+
+      allow create: if isStaff()
+        && request.resource.data.keys().hasOnly([
+          "first_name", "last_name", "full_name_normalized", "email", "birth_date", "course", "class_group_id",
+          "guardian_name", "guardian_email", "guardian_relationship", "guardian_two_name", "guardian_two_email",
+          "guardian_two_relationship", "guardian_emails", "created_by", "created_at"
+        ])
+        && request.resource.data.created_by == request.auth.uid
+        && validName(request.resource.data);
+
+      allow update: if (
+          isCoordination()
+          || (isTeacher() && resource.data.created_by == request.auth.uid)
+        )
+        && request.resource.data.created_by == resource.data.created_by
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "first_name", "last_name", "full_name_normalized", "email", "birth_date", "course", "class_group_id",
+          "guardian_name", "guardian_email", "guardian_relationship", "guardian_two_name", "guardian_two_email",
+          "guardian_two_relationship", "guardian_emails", "updated_at"
+        ])
+        && validName(request.resource.data);
+
+      allow delete: if isCoordination()
+        || (isTeacher() && resource.data.created_by == request.auth.uid);
+    }
+
+    match /contents/{contentId} {
+      allow read: if isCoordination()
+        || (isTeacher() && resource.data.teacher_id == request.auth.uid);
+
+      allow create: if isStaff()
+        && request.resource.data.keys().hasOnly([
+          "title", "description", "instructions", "resource_url", "content_type", "age_group", "estimated_minutes", "teacher_id", "status", "created_at"
+        ])
+        && request.resource.data.teacher_id == request.auth.uid
+        && request.resource.data.status == "draft";
+
+      allow update: if (
+          isCoordination()
+          || (isTeacher() && resource.data.teacher_id == request.auth.uid)
+        )
+        && request.resource.data.teacher_id == resource.data.teacher_id
+        && request.resource.data.status == resource.data.status
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "title", "description", "instructions", "resource_url", "content_type", "age_group", "estimated_minutes", "updated_at"
+        ]);
+
+      allow delete: if isCoordination()
+        || (isTeacher() && resource.data.teacher_id == request.auth.uid);
+    }
+
+    match /assignments/{assignmentId} {
+      allow read: if isCoordination()
+        || (isTeacher() && resource.data.assigned_by == request.auth.uid)
+        || ownsStudent(resource.data.student_id)
+        || ownsContent(resource.data.content_id)
+        || (
+          signedIn()
+          && request.auth.token.email != null
+          && (
+            resource.data.student_email == request.auth.token.email
+            || (resource.data.guardian_emails is list && request.auth.token.email in resource.data.guardian_emails)
+          )
+        );
+
+      allow create: if (
+          isCoordination()
+          || (
+            isTeacher()
+            && request.resource.data.assigned_by == request.auth.uid
+            && ownsStudent(request.resource.data.student_id)
+            && ownsContent(request.resource.data.content_id)
+          )
+        )
+        && request.resource.data.keys().hasOnly([
+          "content_id", "student_id", "student_email", "student_name", "guardian_emails", "assigned_by", "content",
+          "assignment_instructions", "due_at", "pdf_url", "pdf_name", "status", "assigned_at"
+        ])
+        && request.resource.data.content.keys().hasOnly([
+          "title", "description", "instructions", "resource_url", "content_type", "age_group", "estimated_minutes"
+        ])
+        && request.resource.data.student_email == get(/databases/$(database)/documents/students/$(request.resource.data.student_id)).data.email
+        && request.resource.data.guardian_emails == get(/databases/$(database)/documents/students/$(request.resource.data.student_id)).data.guardian_emails;
+
+      allow update: if isCoordination()
+        || (
+          isTeacher()
+          && ownsContent(resource.data.content_id)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["content"])
+        )
+        || (
+          isTeacher()
+          && resource.data.assigned_by == request.auth.uid
+          && request.resource.data.assigned_by == resource.data.assigned_by
+          && request.resource.data.student_id == resource.data.student_id
+          && request.resource.data.content_id == resource.data.content_id
+          && request.resource.data.student_email == resource.data.student_email
+          && ownsStudent(resource.data.student_id)
+          && ownsContent(resource.data.content_id)
+        );
+
+      allow delete: if isCoordination()
+        || (
+          isTeacher()
+          && resource.data.assigned_by == request.auth.uid
+          && ownsStudent(resource.data.student_id)
+          && ownsContent(resource.data.content_id)
+        );
+    }
+
+    match /attendance/{recordId} {
+      allow read: if isCoordination()
+        || (isTeacher() && resource.data.created_by == request.auth.uid);
+      allow create: if isStaff()
+        && request.resource.data.created_by == request.auth.uid;
+      allow update: if (
+          isCoordination()
+          || (isTeacher() && resource.data.created_by == request.auth.uid)
+        )
+        && request.resource.data.created_by == resource.data.created_by;
+      allow delete: if isCoordination();
+    }
+
+    match /lessons/{lessonId} {
+      allow read: if isCoordination()
+        || (isTeacher() && resource.data.teacher_id == request.auth.uid)
+        || (
+          signedIn()
+          && request.auth.token.email != null
+          && (
+            resource.data.student_email == request.auth.token.email
+            || (resource.data.guardian_emails is list && request.auth.token.email in resource.data.guardian_emails)
+          )
+        );
+      allow create: if isStaff()
+        && request.resource.data.teacher_id == request.auth.uid
+        && (isCoordination() || ownsStudent(request.resource.data.student_id))
+        && request.resource.data.student_email == get(/databases/$(database)/documents/students/$(request.resource.data.student_id)).data.email
+        && request.resource.data.guardian_emails == get(/databases/$(database)/documents/students/$(request.resource.data.student_id)).data.guardian_emails;
+      allow update, delete: if isCoordination()
+        || (isTeacher() && resource.data.teacher_id == request.auth.uid);
+    }
+
+    match /pedagogical_records/{recordId} {
+      allow read: if isCoordination()
+        || (isTeacher() && resource.data.created_by == request.auth.uid)
+        || (
+          signedIn()
+          && resource.data.published == true
+          && request.auth.token.email != null
+          && (
+            resource.data.student_email == request.auth.token.email
+            || (resource.data.guardian_emails is list && request.auth.token.email in resource.data.guardian_emails)
+          )
+        );
+      allow create: if isStaff()
+        && request.resource.data.created_by == request.auth.uid
+        && (isCoordination() || ownsStudent(request.resource.data.student_id))
+        && request.resource.data.student_email == get(/databases/$(database)/documents/students/$(request.resource.data.student_id)).data.email
+        && request.resource.data.guardian_emails == get(/databases/$(database)/documents/students/$(request.resource.data.student_id)).data.guardian_emails;
+      allow update, delete: if isCoordination()
+        || (isTeacher() && resource.data.created_by == request.auth.uid);
+    }
+
+    match /academic_structure/{itemId} {
+      allow read: if isCoordination()
+        || (isTeacher() && resource.data.created_by == request.auth.uid);
+      allow create: if isStaff()
+        && request.resource.data.created_by == request.auth.uid
+        && request.resource.data.kind in ["school", "course", "class_group"];
+      allow update, delete: if isCoordination()
+        || (isTeacher() && resource.data.created_by == request.auth.uid);
+    }
+
+    match /reports/{reportId} {
+      allow read: if isCoordination()
+        || (isTeacher() && resource.data.created_by == request.auth.uid);
+      allow create: if isStaff()
+        && request.resource.data.created_by == request.auth.uid;
+      allow update: if (
+          isCoordination()
+          || (isTeacher() && resource.data.created_by == request.auth.uid)
+        )
+        && request.resource.data.created_by == resource.data.created_by;
+      allow delete: if isCoordination();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

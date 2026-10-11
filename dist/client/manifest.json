@@ -1,0 +1,19 @@
+{
+  "name": "New Code — Plataforma Educacional",
+  "short_name": "New Code",
+  "description": "Uma área de aprendizado viva para alunos, famílias e professores.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#05070d",
+  "lang": "pt-BR",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "public/logo.png?v=10",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

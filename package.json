@@ -1,0 +1,11 @@
+{
+  "name": "new-code-platform",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node dev-server.cjs",
+    "build": "node build.mjs",
+    "check": "node --check script.js && node --check views.js && node --check freshViews.js && node --check worker/index.js && node --check services/firebaseService.js && node --check services/platformService.js"
+  }
+}

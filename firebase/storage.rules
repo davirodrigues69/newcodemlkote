@@ -1,0 +1,65 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isCoordination() {
+      return signedIn()
+        && firestore.get(/databases/(default)/documents/profiles/$(request.auth.uid)).data.role == "admin";
+    }
+
+    function isTeacher() {
+      return signedIn()
+        && firestore.get(/databases/(default)/documents/profiles/$(request.auth.uid)).data.role == "teacher";
+    }
+
+    function assignment(assignmentId) {
+      return firestore.get(/databases/(default)/documents/assignments/$(assignmentId)).data;
+    }
+
+    match /profile-photos/{userId}/{fileName} {
+      allow read: if signedIn()
+        && fileName == "avatar"
+        && (request.auth.uid == userId || isCoordination());
+      allow create, update: if signedIn()
+        && request.auth.uid == userId
+        && fileName == "avatar"
+        && request.resource.size < 3 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+      allow delete: if signedIn()
+        && fileName == "avatar"
+        && (request.auth.uid == userId || isCoordination());
+    }
+
+    match /assignment-pdfs/{assignmentId}/{fileName} {
+      allow read: if signedIn()
+        && fileName == "activity.pdf"
+        && (
+          isCoordination()
+          || assignment(assignmentId).assigned_by == request.auth.uid
+          || (
+            request.auth.token.email != null
+            && (
+              assignment(assignmentId).student_email == request.auth.token.email
+              || (assignment(assignmentId).guardian_emails is list && request.auth.token.email in assignment(assignmentId).guardian_emails)
+            )
+          )
+        );
+      allow create, update: if signedIn()
+        && fileName == "activity.pdf"
+        && (isCoordination() || (isTeacher() && assignment(assignmentId).assigned_by == request.auth.uid))
+        && request.resource.size <= 10 * 1024 * 1024
+        && request.resource.contentType == "application/pdf";
+      allow delete: if signedIn()
+        && fileName == "activity.pdf"
+        && (isCoordination() || (isTeacher() && assignment(assignmentId).assigned_by == request.auth.uid));
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
